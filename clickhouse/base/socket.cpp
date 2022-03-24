@@ -206,7 +206,7 @@ size_t SocketInput::DoRead(void* buf, size_t len) {
         const ssize_t ret = ::recv(s_, (char*)buf, (int)len, 0);
         // should retry when errno is EAGAIN, EWOULDBLOCK or EINTR
         if (ret < 0 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)) {
-            return DoRead(buf, len);
+            continue;
         }
 
         if (ret > 0) {
