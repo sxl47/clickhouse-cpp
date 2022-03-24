@@ -1,6 +1,7 @@
-ADD_EXECUTABLE (clickhouse-cpp-ut
+SET ( clickhouse-cpp-ut-src
     main.cpp
 
+    block_ut.cpp
     client_ut.cpp
     columns_ut.cpp
     itemview_ut.cpp
@@ -12,9 +13,22 @@ ADD_EXECUTABLE (clickhouse-cpp-ut
     performance_tests.cpp
     tcp_server.cpp
     utils.cpp
+    readonly_client_test.cpp
+    connection_failed_client_test.cpp
+)
+
+IF (WITH_OPENSSL)
+    LIST (APPEND clickhouse-cpp-ut-src ssl_ut.cpp)
+ENDIF ()
+
+ADD_EXECUTABLE (clickhouse-cpp-ut
+    ${clickhouse-cpp-ut-src}
 )
 
 TARGET_LINK_LIBRARIES (clickhouse-cpp-ut
-    clickhouse-cpp-lib
+    clickhouse-cpp-lib-static
     gtest-lib
 )
+IF (CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+    set (CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} --rtlib=compiler-rt")
+ENDIF ()

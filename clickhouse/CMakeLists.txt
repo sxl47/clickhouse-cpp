@@ -1,10 +1,10 @@
 SET ( clickhouse-cpp-lib-src
-    base/coded.cpp
     base/compressed.cpp
     base/input.cpp
     base/output.cpp
     base/platform.cpp
     base/socket.cpp
+    base/wire_format.cpp
 
     columns/array.cpp
     columns/date.cpp
@@ -31,6 +31,10 @@ SET ( clickhouse-cpp-lib-src
     query.cpp
 )
 
+IF (WITH_OPENSSL)
+    LIST(APPEND clickhouse-cpp-lib-src base/sslsocket.cpp)
+ENDIF ()
+
 ADD_LIBRARY (clickhouse-cpp-lib SHARED ${clickhouse-cpp-lib-src})
 SET_TARGET_PROPERTIES(clickhouse-cpp-lib PROPERTIES LINKER_LANGUAGE CXX)
 TARGET_LINK_LIBRARIES (clickhouse-cpp-lib
@@ -47,12 +51,21 @@ TARGET_LINK_LIBRARIES (clickhouse-cpp-lib-static
 )
 
 IF (CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+    # there is a problem with __builtin_mul_overflow call at link time
+    # the error looks like: ... undefined reference to `__muloti4' ...
+    # caused by clang bug https://bugs.llvm.org/show_bug.cgi?id=16404
+    # explicit linking to compiler-rt allows to workaround the problem
     set (CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} --rtlib=compiler-rt")
+
+    # some workaround for linking issues on linux:
+    # /usr/bin/ld: CMakeFiles/simple-test.dir/main.cpp.o: undefined reference to symbol '_Unwind_Resume@@GCC_3.0'
+    # /usr/bin/ld: /lib/x86_64-linux-gnu/libgcc_s.so.1: error adding symbols: DSO missing from command line
+    # FIXME: that workaround breaks clang build on mingw
     TARGET_LINK_LIBRARIES (clickhouse-cpp-lib gcc_s)
     TARGET_LINK_LIBRARIES (clickhouse-cpp-lib-static gcc_s)
 ENDIF ()
 
-INSTALL(TARGETS clickhouse-cpp-lib clickhouse-cpp-lib-static
+INSTALL (TARGETS clickhouse-cpp-lib clickhouse-cpp-lib-static
     ARCHIVE DESTINATION lib
     LIBRARY DESTINATION lib
 )
@@ -68,7 +81,6 @@ INSTALL(FILES query.h DESTINATION include/clickhouse/)
 
 # base
 INSTALL(FILES base/buffer.h DESTINATION include/clickhouse/base/)
-INSTALL(FILES base/coded.h DESTINATION include/clickhouse/base/)
 INSTALL(FILES base/compressed.h DESTINATION include/clickhouse/base/)
 INSTALL(FILES base/input.h DESTINATION include/clickhouse/base/)
 INSTALL(FILES base/output.h DESTINATION include/clickhouse/base/)
@@ -100,3 +112,13 @@ INSTALL(FILES columns/uuid.h DESTINATION include/clickhouse/columns/)
 # types
 INSTALL(FILES types/type_parser.h DESTINATION include/clickhouse/types/)
 INSTALL(FILES types/types.h DESTINATION include/clickhouse/types/)
+
+IF (WITH_OPENSSL)
+    TARGET_LINK_LIBRARIES (clickhouse-cpp-lib OpenSSL::SSL)
+    TARGET_LINK_LIBRARIES (clickhouse-cpp-lib-static OpenSSL::SSL)
+ENDIF ()
+
+IF (WIN32 OR MINGW)
+    TARGET_LINK_LIBRARIES (clickhouse-cpp-lib wsock32 ws2_32)
+    TARGET_LINK_LIBRARIES (clickhouse-cpp-lib-static wsock32 ws2_32)
+ENDIF ()

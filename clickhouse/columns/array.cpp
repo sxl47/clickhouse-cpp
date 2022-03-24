@@ -1,4 +1,5 @@
 #include "array.h"
+#include "numeric.h"
 #include <stdexcept>
 
 namespace clickhouse {
@@ -34,8 +35,7 @@ ColumnRef ColumnArray::Slice(size_t begin, size_t size) const {
     auto result = std::make_shared<ColumnArray>(GetAsColumn(begin));
     result->OffsetsIncrease(1);
 
-    for (size_t i = 1; i < size; i++)
-    {
+    for (size_t i = 1; i < size; i++) {
         result->Append(std::make_shared<ColumnArray>(GetAsColumn(begin + i)));
     }
 
@@ -54,7 +54,7 @@ void ColumnArray::Append(ColumnRef column) {
     }
 }
 
-bool ColumnArray::Load(CodedInputStream* input, size_t rows) {
+bool ColumnArray::Load(InputStream* input, size_t rows) {
     if (!rows) {
         return true;
     }
@@ -67,7 +67,7 @@ bool ColumnArray::Load(CodedInputStream* input, size_t rows) {
     return true;
 }
 
-void ColumnArray::Save(CodedOutputStream* output) {
+void ColumnArray::Save(OutputStream* output) {
     offsets_->Save(output);
     data_->Save(output);
 }

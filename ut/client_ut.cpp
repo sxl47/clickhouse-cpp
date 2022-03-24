@@ -1,7 +1,14 @@
 #include <clickhouse/client.h>
-#include <contrib/gtest/gtest.h>
+
+#include "readonly_client_test.h"
+#include "connection_failed_client_test.h"
+#include "utils.h"
+
+#include <gtest/gtest.h>
 
 #include <cmath>
+#include <thread>
+#include <chrono>
 
 using namespace clickhouse;
 
@@ -49,13 +56,9 @@ class ClientCase : public testing::TestWithParam<ClientOptions> {
 protected:
     void SetUp() override {
         client_ = std::make_unique<Client>(GetParam());
-        client_->Execute("CREATE DATABASE IF NOT EXISTS test_clickhouse_cpp");
     }
 
-    void TearDown() override {
-        if (client_)
-            client_->Execute("DROP DATABASE test_clickhouse_cpp");
-    }
+    void TearDown() override {}
 
     template <typename T>
     std::shared_ptr<T> createTableWithOneColumn(Block & block)
@@ -63,9 +66,8 @@ protected:
         auto col = std::make_shared<T>();
         const auto type_name = col->GetType().GetName();
 
-        client_->Execute("DROP TABLE IF EXISTS " + table_name + ";");
-        client_->Execute("CREATE TABLE IF NOT EXISTS " + table_name + "( " + column_name + " " + type_name + " )"
-                "ENGINE = Memory");
+        client_->Execute("DROP TEMPORARY TABLE IF EXISTS " + table_name + ";");
+        client_->Execute("CREATE TEMPORARY TABLE IF NOT EXISTS " + table_name + "( " + column_name + " " + type_name + " )");
 
         block.AppendColumn("test_column", col);
 
@@ -78,7 +80,7 @@ protected:
     }
 
     std::unique_ptr<Client> client_;
-    const std::string table_name = "test_clickhouse_cpp.test_ut_table";
+    const std::string table_name = "test_clickhouse_cpp_test_ut_table";
     const std::string column_name = "test_column";
 };
 
@@ -86,9 +88,7 @@ TEST_P(ClientCase, Array) {
     Block b;
 
     /// Create a table.
-    client_->Execute(
-            "CREATE TABLE IF NOT EXISTS test_clickhouse_cpp.array (arr Array(UInt64)) "
-            "ENGINE = Memory");
+    client_->Execute("CREATE TEMPORARY TABLE IF NOT EXISTS test_clickhouse_cpp_array (arr Array(UInt64)) ");
 
     /// Insert some values.
     {
@@ -108,13 +108,13 @@ TEST_P(ClientCase, Array) {
         arr->AppendAsColumn(id);
 
         b.AppendColumn("arr", arr);
-        client_->Insert("test_clickhouse_cpp.array", b);
+        client_->Insert("test_clickhouse_cpp_array", b);
     }
 
     const uint64_t ARR_SIZE[] = { 1, 2, 3, 4 };
     const uint64_t VALUE[] = { 1, 3, 7, 9 };
     size_t row = 0;
-    client_->Select("SELECT arr FROM test_clickhouse_cpp.array",
+    client_->Select("SELECT arr FROM test_clickhouse_cpp_array",
             [ARR_SIZE, VALUE, &row](const Block& block)
         {
             if (block.GetRowCount() == 0) {
@@ -139,16 +139,15 @@ TEST_P(ClientCase, Date) {
 
     /// Create a table.
     client_->Execute(
-            "CREATE TABLE IF NOT EXISTS test_clickhouse_cpp.date (d DateTime('UTC')) "
-            "ENGINE = Memory");
+            "CREATE TEMPORARY TABLE IF NOT EXISTS test_clickhouse_cpp_date (d DateTime('UTC')) ");
 
     auto d = std::make_shared<ColumnDateTime>();
     auto const now = std::time(nullptr);
     d->Append(now);
     b.AppendColumn("d", d);
-    client_->Insert("test_clickhouse_cpp.date", b);
+    client_->Insert("test_clickhouse_cpp_date", b);
 
-    client_->Select("SELECT d FROM test_clickhouse_cpp.date", [&now](const Block& block)
+    client_->Select("SELECT d FROM test_clickhouse_cpp_date", [&now](const Block& block)
         {
             if (block.GetRowCount() == 0) {
                 return;
@@ -245,14 +244,13 @@ TEST_P(ClientCase, LowCardinalityString_AsString) {
     options.SetBakcwardCompatibilityFeatureLowCardinalityAsWrappedColumn(true);
 
     client_ = std::make_unique<Client>(GetParam());
-    client_->Execute("CREATE DATABASE IF NOT EXISTS test_clickhouse_cpp");
+    // client_->Execute("CREATE DATABASE IF NOT EXISTS test_clickhouse_cpp");
 
     Block block;
     auto col = std::make_shared<ColumnString>();
 
-    client_->Execute("DROP TABLE IF EXISTS " + table_name + ";");
-    client_->Execute("CREATE TABLE IF NOT EXISTS " + table_name + "( " + column_name + " LowCardinality(String) )"
-            "ENGINE = Memory");
+    client_->Execute("DROP TEMPORARY TABLE IF EXISTS " + table_name + ";");
+    client_->Execute("CREATE TEMPORARY TABLE IF NOT EXISTS " + table_name + "( " + column_name + " LowCardinality(String) )");
 
     block.AppendColumn("test_column", col);
 
@@ -287,8 +285,7 @@ TEST_P(ClientCase, LowCardinalityString_AsString) {
 
 TEST_P(ClientCase, Generic) {
     client_->Execute(
-            "CREATE TABLE IF NOT EXISTS test_clickhouse_cpp.client (id UInt64, name String) "
-            "ENGINE = Memory");
+            "CREATE TEMPORARY TABLE IF NOT EXISTS test_clickhouse_cpp_client (id UInt64, name String) ");
 
     const struct {
         uint64_t id;
@@ -314,12 +311,12 @@ TEST_P(ClientCase, Generic) {
         block.AppendColumn("id"  , id);
         block.AppendColumn("name", name);
 
-        client_->Insert("test_clickhouse_cpp.client", block);
+        client_->Insert("test_clickhouse_cpp_client", block);
     }
 
     /// Select values inserted in the previous step.
     size_t row = 0;
-    client_->Select("SELECT id, name FROM test_clickhouse_cpp.client", [TEST_DATA, &row](const Block& block)
+    client_->Select("SELECT id, name FROM test_clickhouse_cpp_client", [TEST_DATA, &row](const Block& block)
         {
             if (block.GetRowCount() == 0) {
                 return;
@@ -338,8 +335,7 @@ TEST_P(ClientCase, Generic) {
 TEST_P(ClientCase, Nullable) {
     /// Create a table.
     client_->Execute(
-            "CREATE TABLE IF NOT EXISTS test_clickhouse_cpp.nullable (id Nullable(UInt64), date Nullable(Date)) "
-            "ENGINE = Memory");
+            "CREATE TEMPORARY TABLE IF NOT EXISTS test_clickhouse_cpp_nullable (id Nullable(UInt64), date Nullable(Date)) ");
 
     // Round std::time_t to start of date.
     const std::time_t cur_date = std::time(nullptr) / 86400 * 86400;
@@ -378,12 +374,12 @@ TEST_P(ClientCase, Nullable) {
             block.AppendColumn("date", std::make_shared<ColumnNullable>(date, nulls));
         }
 
-        client_->Insert("test_clickhouse_cpp.nullable", block);
+        client_->Insert("test_clickhouse_cpp_nullable", block);
     }
 
     /// Select values inserted in the previous step.
     size_t row = 0;
-    client_->Select("SELECT id, date FROM test_clickhouse_cpp.nullable",
+    client_->Select("SELECT id, date FROM test_clickhouse_cpp_nullable",
             [TEST_DATA, &row](const Block& block)
         {
             for (size_t c = 0; c < block.GetRowCount(); ++c, ++row) {
@@ -433,20 +429,18 @@ TEST_P(ClientCase, Numbers) {
 TEST_P(ClientCase, SimpleAggregateFunction) {
     const auto & server_info = client_->GetServerInfo();
     if (versionNumber(server_info) < versionNumber(19, 9)) {
-        std::cout << "Test is skipped since server '" << server_info << "' does not support SimpleAggregateFunction" << std::endl;
-        return;
+        GTEST_SKIP() << "Test is skipped since server '" << server_info << "' does not support SimpleAggregateFunction" << std::endl;
     }
 
-    client_->Execute("DROP TABLE IF EXISTS test_clickhouse_cpp.SimpleAggregateFunction");
+    client_->Execute("DROP TEMPORARY TABLE IF EXISTS test_clickhouse_cpp_SimpleAggregateFunction");
     client_->Execute(
-            "CREATE TABLE IF NOT EXISTS test_clickhouse_cpp.SimpleAggregateFunction (saf SimpleAggregateFunction(sum, UInt64))"
-            "ENGINE = Memory");
+            "CREATE TEMPORARY TABLE IF NOT EXISTS test_clickhouse_cpp_SimpleAggregateFunction (saf SimpleAggregateFunction(sum, UInt64))");
 
     constexpr size_t EXPECTED_ROWS = 10;
-    client_->Execute("INSERT INTO test_clickhouse_cpp.SimpleAggregateFunction (saf) SELECT number FROM system.numbers LIMIT 10");
+    client_->Execute("INSERT INTO test_clickhouse_cpp_SimpleAggregateFunction (saf) SELECT number FROM system.numbers LIMIT 10");
 
     size_t total_rows = 0;
-    client_->Select("Select * FROM test_clickhouse_cpp.SimpleAggregateFunction", [&total_rows](const Block & block) {
+    client_->Select("Select * FROM test_clickhouse_cpp_SimpleAggregateFunction", [&total_rows](const Block & block) {
         if (block.GetRowCount() == 0)
             return;
 
@@ -467,8 +461,7 @@ TEST_P(ClientCase, SimpleAggregateFunction) {
 TEST_P(ClientCase, Cancellable) {
     /// Create a table.
     client_->Execute(
-            "CREATE TABLE IF NOT EXISTS test_clickhouse_cpp.cancel (x UInt64) "
-            "ENGINE = Memory");
+            "CREATE TEMPORARY TABLE IF NOT EXISTS test_clickhouse_cpp_cancel (x UInt64) ");
 
     /// Insert a few blocks. In order to make cancel have effect, we have to
     /// insert a relative larget amount of data.
@@ -483,13 +476,13 @@ TEST_P(ClientCase, Cancellable) {
         }
 
         b.AppendColumn("x", x);
-        client_->Insert("test_clickhouse_cpp.cancel", b);
+        client_->Insert("test_clickhouse_cpp_cancel", b);
     }
 
     /// Send a query which is canceled after receiving the first blockr.
     int row_cnt = 0;
     EXPECT_NO_THROW(
-        client_->SelectCancelable("SELECT * FROM test_clickhouse_cpp.cancel",
+        client_->SelectCancelable("SELECT * FROM test_clickhouse_cpp_cancel",
             [&row_cnt](const Block& block)
             {
                 row_cnt += block.GetRowCount();
@@ -504,22 +497,19 @@ TEST_P(ClientCase, Cancellable) {
 TEST_P(ClientCase, Exception) {
     /// Create a table.
     client_->Execute(
-            "CREATE TABLE IF NOT EXISTS test_clickhouse_cpp.exceptions (id UInt64, name String) "
-            "ENGINE = Memory");
+            "CREATE TEMPORARY TABLE IF NOT EXISTS test_clickhouse_cpp_exceptions (id UInt64, name String) ");
 
     /// Expect failing on table creation.
     EXPECT_THROW(
         client_->Execute(
-            "CREATE TABLE test_clickhouse_cpp.exceptions (id UInt64, name String) "
-            "ENGINE = Memory"),
+            "CREATE TEMPORARY TABLE test_clickhouse_cpp_exceptions (id UInt64, name String) "),
         ServerException);
 }
 
 TEST_P(ClientCase, Enum) {
     /// Create a table.
     client_->Execute(
-            "CREATE TABLE IF NOT EXISTS test_clickhouse_cpp.enums (id UInt64, e Enum8('One' = 1, 'Two' = 2)) "
-            "ENGINE = Memory");
+            "CREATE TEMPORARY TABLE IF NOT EXISTS test_clickhouse_cpp_enums (id UInt64, e Enum8('One' = 1, 'Two' = 2)) ");
 
     const struct {
         uint64_t id;
@@ -552,12 +542,12 @@ TEST_P(ClientCase, Enum) {
         block.AppendColumn("id", id);
         block.AppendColumn("e", e);
 
-        client_->Insert("test_clickhouse_cpp.enums", block);
+        client_->Insert("test_clickhouse_cpp_enums", block);
     }
 
     /// Select values inserted in the previous step.
     size_t row = 0;
-    client_->Select("SELECT id, e FROM test_clickhouse_cpp.enums", [&row, TEST_DATA](const Block& block)
+    client_->Select("SELECT id, e FROM test_clickhouse_cpp_enums", [&row, TEST_DATA](const Block& block)
         {
             if (block.GetRowCount() == 0) {
                 return;
@@ -577,10 +567,9 @@ TEST_P(ClientCase, Enum) {
 
 TEST_P(ClientCase, Decimal) {
     client_->Execute(
-        "CREATE TABLE IF NOT EXISTS "
-        "test_clickhouse_cpp.decimal (id UInt64, d1 Decimal(9, 4), d2 Decimal(18, 9), d3 Decimal(38, 19), "
-        "                         d4 Decimal32(4), d5 Decimal64(9), d6 Decimal128(19)) "
-        "ENGINE = Memory");
+        "CREATE TEMPORARY TABLE IF NOT EXISTS "
+        "test_clickhouse_cpp_decimal (id UInt64, d1 Decimal(9, 4), d2 Decimal(18, 9), d3 Decimal(38, 19), "
+        "                         d4 Decimal32(4), d5 Decimal64(9), d6 Decimal128(19)) ");
 
     {
         Block b;
@@ -676,10 +665,10 @@ TEST_P(ClientCase, Decimal) {
         b.AppendColumn("d5", d5);
         b.AppendColumn("d6", d6);
 
-        client_->Insert("test_clickhouse_cpp.decimal", b);
+        client_->Insert("test_clickhouse_cpp_decimal", b);
     }
 
-    client_->Select("SELECT id, d1, d2, d3, d4, d5, d6 FROM test_clickhouse_cpp.decimal ORDER BY id", [](const Block& b) {
+    client_->Select("SELECT id, d1, d2, d3, d4, d5, d6 FROM test_clickhouse_cpp_decimal ORDER BY id", [](const Block& b) {
         if (b.GetRowCount() == 0) {
             return;
         }
@@ -766,9 +755,9 @@ TEST_P(ClientCase, Decimal) {
 
 // Test special chars in names
 TEST_P(ClientCase, ColEscapeNameTest) {
-    client_->Execute(R"sql(DROP TABLE IF EXISTS test_clickhouse_cpp."col_escape_""name_test";)sql");
+    client_->Execute(R"sql(DROP TEMPORARY TABLE IF EXISTS "test_clickhouse_cpp_col_escape_""name_test";)sql");
 
-    client_->Execute(R"sql(CREATE TABLE IF NOT EXISTS test_clickhouse_cpp."col_escape_""name_test" ("test space" UInt64, "test "" quote" UInt64, "test ""`'[]&_\ all" UInt64) ENGINE = Memory)sql");
+    client_->Execute(R"sql(CREATE TEMPORARY TABLE IF NOT EXISTS "test_clickhouse_cpp_col_escape_""name_test" ("test space" UInt64, "test "" quote" UInt64, "test ""`'[]&_\ all" UInt64))sql");
 
     auto col1 = std::make_shared<ColumnUInt64>();
     col1->Append(1);
@@ -792,8 +781,8 @@ TEST_P(ClientCase, ColEscapeNameTest) {
     block.AppendColumn(column_names[1], col2);
     block.AppendColumn(column_names[2], col3);
 
-    client_->Insert(R"sql(test_clickhouse_cpp."col_escape_""name_test")sql", block);
-    client_->Select(R"sql(SELECT * FROM test_clickhouse_cpp."col_escape_""name_test")sql", [] (const Block& sblock)
+    client_->Insert(R"sql("test_clickhouse_cpp_col_escape_""name_test")sql", block);
+    client_->Select(R"sql(SELECT * FROM "test_clickhouse_cpp_col_escape_""name_test")sql", [] (const Block& sblock)
     {
         int row = sblock.GetRowCount();
         if (row <= 0) {return;}
@@ -816,23 +805,21 @@ TEST_P(ClientCase, ColEscapeNameTest) {
 TEST_P(ClientCase, DateTime64) {
     const auto & server_info = client_->GetServerInfo();
     if (versionNumber(server_info) < versionNumber(20, 1)) {
-        std::cout << "Test is skipped since server '" << server_info << "' does not support DateTime64" << std::endl;
-        return;
+        GTEST_SKIP() << "Test is skipped since server '" << server_info << "' does not support DateTime64" << std::endl;
     }
 
     Block block;
-    client_->Execute("DROP TABLE IF EXISTS test_clickhouse_cpp.datetime64;");
+    client_->Execute("DROP TEMPORARY TABLE IF EXISTS test_clickhouse_cpp_datetime64;");
 
-    client_->Execute("CREATE TABLE IF NOT EXISTS "
-            "test_clickhouse_cpp.datetime64 (dt DateTime64(6)) "
-            "ENGINE = Memory");
+    client_->Execute("CREATE TEMPORARY TABLE IF NOT EXISTS "
+            "test_clickhouse_cpp_datetime64 (dt DateTime64(6)) ");
 
     auto col_dt64 = std::make_shared<ColumnDateTime64>(6);
     block.AppendColumn("dt", col_dt64);
 
     // Empty INSERT and SELECT
-    client_->Insert("test_clickhouse_cpp.datetime64", block);
-    client_->Select("SELECT dt FROM test_clickhouse_cpp.datetime64",
+    client_->Insert("test_clickhouse_cpp_datetime64", block);
+    client_->Select("SELECT dt FROM test_clickhouse_cpp_datetime64",
         [](const Block& block) {
             ASSERT_EQ(0U, block.GetRowCount());
         }
@@ -854,10 +841,10 @@ TEST_P(ClientCase, DateTime64) {
     block.RefreshRowCount();
 
     // Non-empty INSERT and SELECT
-    client_->Insert("test_clickhouse_cpp.datetime64", block);
+    client_->Insert("test_clickhouse_cpp_datetime64", block);
 
     size_t total_rows = 0;
-    client_->Select("SELECT dt FROM test_clickhouse_cpp.datetime64",
+    client_->Select("SELECT dt FROM test_clickhouse_cpp_datetime64",
         [&total_rows, &data](const Block& block) {
             total_rows += block.GetRowCount();
             if (block.GetRowCount() == 0) {
@@ -877,14 +864,106 @@ TEST_P(ClientCase, DateTime64) {
     ASSERT_EQ(total_rows, data.size());
 }
 
-INSTANTIATE_TEST_CASE_P(
+TEST_P(ClientCase, Query_ID) {
+    const auto server_info = client_->GetServerInfo();
+
+    std::srand(std::time(nullptr) + reinterpret_cast<int64_t>(&server_info));
+    const auto * test_info = ::testing::UnitTest::GetInstance()->current_test_info();
+    const std::string query_id = std::to_string(std::rand()) + "-" + test_info->test_suite_name() + "/" + test_info->name();
+
+    SCOPED_TRACE(query_id);
+
+    const std::string table_name = "test_clickhouse_cpp_query_id_test";
+    client_->Execute(Query("CREATE TEMPORARY TABLE IF NOT EXISTS " + table_name + " (a Int64)", query_id));
+
+    {
+        Block b;
+        b.AppendColumn("a", std::make_shared<ColumnInt64>(std::vector<int64_t>{1, 2, 3}));
+        client_->Insert(table_name, query_id, b);
+    }
+
+    client_->Select("SELECT 'a', count(*) FROM " + table_name, query_id, [](const Block &) {});
+    client_->SelectCancelable("SELECT 'b', count(*) FROM " + table_name, query_id, [](const Block &) { return true; });
+    client_->Execute(Query("TRUNCATE TABLE " + table_name, query_id));
+
+    try {
+        client_->Execute("SYSTEM FLUSH LOGS");
+    } catch (const std::exception & e) {
+        // DB::Exception: clickhouse_cpp_cicd: Not enough privileges. To execute this query it's necessary to have grant SYSTEM FLUSH LOGS ON
+        if (std::string(e.what()).find("To execute this query it's necessary to have grant SYSTEM FLUSH LOGS ON") != std::string::npos) {
+            // Insufficient privileges, the only safe way is to wait long enough for system
+            // to flush the logs automaticaly. Usualy it takes 7.5 seconds, so just in case,
+            // wait 3 times that to ensure that all previously executed queries are in the logs now.
+            const auto wait_duration = std::chrono::seconds(23);
+            std::cerr << "Got error while flushing logs, now we wait " << wait_duration << "..." << std::endl;
+            std::this_thread::sleep_for(wait_duration);
+        }
+    }
+
+    size_t total_count = 0;
+    client_->Select("SELECT type, query_kind, query_id, query "
+                    " FROM system.query_log "
+                    " WHERE type = 'QueryStart' AND query_id == '" + query_id +"'",
+        [&total_count](const Block & block) {
+            total_count += block.GetRowCount();
+//            std::cerr << PrettyPrintBlock{block} << std::endl;
+    });
+
+    // We've executed 5 queries with explicit query_id, hence we expect to see 5 entries in logs.
+    EXPECT_EQ(5u, total_count);
+}
+
+const auto LocalHostEndpoint = ClientOptions()
+        .SetHost(           getEnvOrDefault("CLICKHOUSE_HOST",     "localhost"))
+        .SetPort(   getEnvOrDefault<size_t>("CLICKHOUSE_PORT",     "9000"))
+        .SetUser(           getEnvOrDefault("CLICKHOUSE_USER",     "default"))
+        .SetPassword(       getEnvOrDefault("CLICKHOUSE_PASSWORD", ""))
+        .SetDefaultDatabase(getEnvOrDefault("CLICKHOUSE_DB",       "default"));
+
+INSTANTIATE_TEST_SUITE_P(
     Client, ClientCase,
     ::testing::Values(
-        ClientOptions()
-            .SetHost("localhost")
+        ClientOptions(LocalHostEndpoint)
             .SetPingBeforeQuery(true),
-        ClientOptions()
-            .SetHost("localhost")
+        ClientOptions(LocalHostEndpoint)
             .SetPingBeforeQuery(false)
             .SetCompressionMethod(CompressionMethod::LZ4)
     ));
+
+namespace {
+using namespace clickhouse;
+
+const auto QUERIES = std::vector<std::string>{
+    "SELECT version()",
+    "SELECT fqdn()",
+    "SELECT buildId()",
+    "SELECT uptime()",
+    "SELECT filesystemFree()",
+    "SELECT now()"
+};
+}
+
+INSTANTIATE_TEST_SUITE_P(ClientLocalReadonly, ReadonlyClientTest,
+    ::testing::Values(ReadonlyClientTest::ParamType{
+        ClientOptions(LocalHostEndpoint)
+            .SetSendRetries(1)
+            .SetPingBeforeQuery(true)
+            .SetCompressionMethod(CompressionMethod::None),
+        QUERIES
+    }
+));
+
+INSTANTIATE_TEST_SUITE_P(ClientLocalFailed, ConnectionFailedClientTest,
+    ::testing::Values(ConnectionFailedClientTest::ParamType{
+        ClientOptions()
+            .SetHost(           getEnvOrDefault("CLICKHOUSE_HOST",     "localhost"))
+            .SetPort(   getEnvOrDefault<size_t>("CLICKHOUSE_PORT",     "9000"))
+            .SetUser("non_existing_user_clickhouse_cpp_test")
+            .SetPassword("wrongpwd")
+            .SetDefaultDatabase(getEnvOrDefault("CLICKHOUSE_DB",       "default"))
+            .SetSendRetries(1)
+            .SetPingBeforeQuery(true)
+            .SetCompressionMethod(CompressionMethod::None),
+        ExpectingException{"Authentication failed: password is incorrect"}
+    }
+));
