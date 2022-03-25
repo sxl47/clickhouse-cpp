@@ -344,16 +344,12 @@ size_t SocketInput::DoRead(void* buf, size_t len) {
         }
 
         if (ret == 0) {
-            throw std::system_error(
-                errno, std::system_category(), "closed"
-            );
+            throw std::system_error(getSocketErrorCode(), getErrorCategory(), "closed");
         }
 
-    if (ret == 0) {
-        throw std::system_error(getSocketErrorCode(), getErrorCategory(), "closed");
-    }
+        throw std::system_error(getSocketErrorCode(), getErrorCategory(), "can't receive string data");
 
-    throw std::system_error(getSocketErrorCode(), getErrorCategory(), "can't receive string data");
+    } while(true);
 }
 
 bool SocketInput::Skip(size_t /*bytes*/) {
